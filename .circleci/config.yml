@@ -1,11 +1,25 @@
 ACR_DOCKER_AUTH_MASTER: &ACR_DOCKER_AUTH
+  image: ${AZURE_LOGIN_SERVER_NAME}/she/circleci-build-image
   auth:
-    username: humagdmacr
+    username: ${ACR_REGISTRY_NAME}
     password: ${ACR_PASSWORD}
+
+DOCKER_BUILD_AND_PUSH_PARAMETERS_MASTER: &DOCKER_BUILD_AND_PUSH_PARAMETERS
+  image: ${ACR_REPO_BASE}/dhos-sms-api
+  registry: ${AZURE_LOGIN_SERVER_NAME}
+  tag: dev,cb-${CIRCLE_BUILD_NUM},$(git log --pretty=format:'%h' -n 1)
 
 version: 2.1
 orbs:
   azure-acr: circleci/azure-acr@0.1.4
+  docker: circleci/docker@2.2.0
+commands:
+  acr-login:
+    description: Authenticate into Azure Container Registry service
+    steps:
+      - run:
+          name: Auth with ACR
+          command: az acr login -n $ACR_REGISTRY_NAME -u $AZURE_USERNAME -p $AZURE_PASSWORD
 jobs:
   test:
     docker:
@@ -19,7 +33,6 @@ jobs:
           name: Set up tox tests
           command: |
             poetry self update --no-ansi
-            poetry config http-basic.sensynehealth ${GEMFURY_DOWNLOAD_KEY} ''
             pip install --upgrade tox
       - restore_cache:
           keys:
@@ -27,7 +40,7 @@ jobs:
             - v2-poetry-deps-
       - run:
           name: Run tox tests
-          command: tox -e py39
+          command: tox -r -e py39
       - save_cache:
           key: v2-poetry-deps-{{ checksum "poetry.lock" }}
           paths:
@@ -38,8 +51,7 @@ jobs:
             - coverage.xml
   integration-test:
     docker:
-      - image: &circleci_build_image humagdmacr.azurecr.io/she/circleci-build-image
-        <<: *ACR_DOCKER_AUTH
+      - <<: *ACR_DOCKER_AUTH
     environment:
       REPORT_PORTAL_PROJECT: platform
     steps:
@@ -47,16 +59,13 @@ jobs:
       - setup_remote_docker:
           version: 20.10.7
           docker_layer_caching: true
-      - run:
-          name: Auth with ACR
-          command: az acr login -n $ACR_REGISTRY_NAME -u $AZURE_USERNAME -p $AZURE_PASSWORD
+      - acr-login
       - run:
           name: Run the integration test script
           command: .circleci/run_integration_tests.sh  
   deploy-dev:
     docker:
-      - image: *circleci_build_image
-        <<: *ACR_DOCKER_AUTH
+      - <<: *ACR_DOCKER_AUTH
     environment:
       K8S_DEV_DEPLOYMENT_NAME: deployment/dhos-sms-api-dep
       ACR_REPO_BASE: dhos
@@ -68,19 +77,13 @@ jobs:
       - run:
           name: Add build information
           command: .circleci/record_build_info.sh
-      - run:
-          name: Build image
-          command: docker build -t ${CIRCLE_PROJECT_REPONAME} . --build-arg GEMFURY_DOWNLOAD_KEY
-      - azure-acr/build-and-push-image:
-          checkout: false
-          login-server-name: ${AZURE_LOGIN_SERVER_NAME}
-          registry-name: ${AZURE_REGISTRY_NAME}
-          repo: ${ACR_REPO_BASE}/dhos-sms-api
-          tag: dev,cb-${CIRCLE_BUILD_NUM},$(git log --pretty=format:'%h' -n 1)
-          extra-build-args: --build-arg GEMFURY_DOWNLOAD_KEY
-      - run:
-          name: Deploy to UK dev cluster in Azure
-          command: .circleci/deploy_azure_dev.sh uk uk-dev-api-upstream
+      - acr-login
+      - docker/build:
+          step-name: Build Docker image for ACR
+          <<: *DOCKER_BUILD_AND_PUSH_PARAMETERS
+      - docker/push:
+          step-name: Push Docker image to ACR
+          <<: *DOCKER_BUILD_AND_PUSH_PARAMETERS
 workflows:
   version: 2
   build_test_deploy:
@@ -90,7 +93,7 @@ workflows:
       - integration-test:
           context: engineering-build
       - deploy-dev:
-          context: dhos-deploy
+          context: engineering-build
           requires:
             - test
             - integration-test
