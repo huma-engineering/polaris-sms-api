@@ -2,10 +2,6 @@ name: CI
 
 on: [workflow_dispatch, push, pull_request]
 
-env:
-  REGISTRY: humagdmacr.azurecr.io
-  ACR_USERNAME: humagdmacr
-
 jobs:
   test:
     name: Unit testing
@@ -43,12 +39,6 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v3
-      - name: Log in to the Azure Container Registry
-        uses: docker/login-action@v2
-        with:
-          registry: ${{ env.REGISTRY }}
-          username: ${{ env.ACR_USERNAME }}
-          password: ${{ secrets.ACR_PASSWORD }}
       - name: Run the integration test script
         run: ./run_integration_tests.sh
 
@@ -58,15 +48,16 @@ jobs:
     if: ${{ github.ref == 'refs/heads/develop' }}
     runs-on: ubuntu-latest
     env:
-      ACR_REPO_BASE: dhos
+      ACR_REPO_BASE: huma-engineering/dhos
+      REGISTRY: ghcr.io
     steps:
       - uses: actions/checkout@v3
-      - name: Log in to the Azure Container Registry
+      - name: Log in to the GitHub Packages
         uses: docker/login-action@v2
         with:
           registry: ${{ env.REGISTRY }}
-          username: ${{ env.ACR_USERNAME }}
-          password: ${{ secrets.ACR_PASSWORD }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
       - name: Extract metadata (tags, labels) for Docker
         id: meta
         uses: docker/metadata-action@v4
